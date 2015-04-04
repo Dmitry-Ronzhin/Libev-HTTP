@@ -11,7 +11,18 @@
 #include <errno.h>
 #include <string.h>
 
-const int  H_SIZE_LIMIT = 8 * 1024;
+const size_t  H_SIZE_LIMIT = 8 * 1024;
+const size_t  MSG_LIMIT =  1024 * 1024; //We will send at one time only this amount of data
+
+struct my_io{	//Appending buffer for our watcher
+	struct ev_io watcher;
+	void * in_buffer;
+	void * out_buffer;
+	size_t in_size;
+	size_t out_size;
+	bool got_header;
+};
+
 
 int set_nonblock(int fd)
 {
@@ -37,32 +48,77 @@ int parse_http_string()
 //------------------------Callbacks---------------------------
 
 
+void write_cb(struct ev_loop *loop, struct ev_io *watcher, int revents)
+{
+	//TODO Write stuff and kill watcher when finished
+	return;
+}
+
+
 void read_cb(struct ev_loop *loop, struct ev_io *watcher, int revents)
 {
 	const char * http_header_end = "\r\n\r\n";
+	struct my_io * x_watcher = (struct my_io *)watcher;
+	if(x_watcher -> got_header)
+	{
+		return; // TODO This is a patch, we ignore everything after header until we reply
+	}
 	if(EV_ERROR & revents)
 	{
 		return;
 	}
 	static char Buffer[H_SIZE_LIMIT];
-	int RecvSize = recv(watcher->fd, Buffer, 1024, MSG_NOSIGNAL);
+	int RecvSize = recv(watcher->fd, Buffer, H_SIZE_LIMIT, MSG_NOSIGNAL);
+	printf("r_sz = %d \t len = %zu\n", RecvSize, strlen(Buffer));
+
 	if(RecvSize <= 0)
 	{
+		printf("%d\n",__LINE__);
 		ev_io_stop(loop, watcher);
-		free(watcher);
+//	kfree(watcher);
 	}
+	Buffer[RecvSize] = '\0';
+	
+	char * end_sym = strstr(Buffer,http_header_end);
 //	std::cout << strstr(Buffer, http_header_end) << std::endl;
-	if(strstr(Buffer, http_header_end) != NULL)
+	
+	size_t cur_msg_size = x_watcher -> in_size;
+	
+	if(end_sym == NULL)
+		cur_msg_size += RecvSize;
+	else
+		cur_msg_size += end_sym - Buffer;
+
+	if(cur_msg_size > H_SIZE_LIMIT)
 	{
-		send(watcher->fd, "GOT\n", 4, MSG_NOSIGNAL);	
+		std::cout << "Bad request" << std::endl;
+		x_watcher -> in_size = 0;
+		return;
 	}
-	send(watcher->fd, Buffer, RecvSize, MSG_NOSIGNAL);
+
+	memcpy((char *)x_watcher -> in_buffer + x_watcher -> in_size, Buffer, cur_msg_size - x_watcher -> in_size);
+	x_watcher -> in_size = cur_msg_size;
+
+	if(end_sym != NULL)
+	{
+		printf("Got an HTTP Request Message END at  %p\n", end_sym);
+		x_watcher -> got_header = true; 
+		ev_io_init(watcher, write_cb, watcher -> fd, EV_WRITE);
+		ev_io_start(loop,watcher);
+	}
+
+	return;
 }
 
 
 void accept_cb(struct ev_loop *loop, struct ev_io *watcher, int revents)
 {
-	struct ev_io *w_client = (struct ev_io*) malloc (sizeof(struct ev_io));
+	struct my_io *w_client = (struct my_io*) malloc (sizeof(struct my_io));
+	w_client -> in_buffer = malloc(sizeof(char) * H_SIZE_LIMIT);
+	w_client -> out_buffer = NULL; //TODO don't know if that will be the same
+	w_client -> in_size = 0;
+	w_client -> out_size = 0;
+	w_client -> got_header = false;
 	if(EV_ERROR & revents)
 	{
 		return;
@@ -75,8 +131,9 @@ void accept_cb(struct ev_loop *loop, struct ev_io *watcher, int revents)
 	}
 
 	set_nonblock(SlaveSocket);
-	ev_io_init(w_client, read_cb, SlaveSocket, EV_READ);
-	ev_io_start(loop, w_client);
+	ev_io_init((struct ev_io *)w_client, read_cb, SlaveSocket, EV_READ);
+	//ev_io_init((struct ev_io *)w_client, write_cb, SlaveSocket, EV_WRITE);
+	ev_io_start(loop, (struct ev_io*)w_client);
 }
 
 
@@ -86,7 +143,7 @@ void accept_cb(struct ev_loop *loop, struct ev_io *watcher, int revents)
 
 int main(int argc, char * argv[])
 {
-	std::string directory = "htdocs/";
+	std::string directory = "htocs/";
 	int port = 80;
 
 	//TODO Parse CMD arguments for flags
@@ -104,7 +161,7 @@ int main(int argc, char * argv[])
 
 	struct sockaddr_in SockAddr;
 	SockAddr.sin_family = AF_INET;
-	SockAddr.sin_port = htons(80); //Listening for http on 80 port
+	SockAddr.sin_port = htons(8080); //Listening for http on 80 port
 	SockAddr.sin_addr.s_addr = htonl(INADDR_ANY);
 
 	int Result = bind(MasterSocket, (struct sockaddr *) &SockAddr, sizeof(SockAddr));
