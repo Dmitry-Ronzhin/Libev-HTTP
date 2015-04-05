@@ -11,8 +11,18 @@
 #include <errno.h>
 #include <string.h>
 
+#define HTTP_GET 0x01
+#define HTTP_HEAD 0x02
+#define HTTP_POST 0x08
+
+
+#define en_EN 0x01
+
+
 const size_t  H_SIZE_LIMIT = 8 * 1024;
 const size_t  MSG_LIMIT =  1024 * 1024; //We will send at one time only this amount of data
+const size_t  MAX_HOST_SIZE = 1024; //Max hostname len
+const size_t  MAX_PATH_SIZE = 1024; //Max file path len
 
 struct my_io{	//Appending buffer for our watcher
 	struct ev_io watcher;
@@ -23,6 +33,13 @@ struct my_io{	//Appending buffer for our watcher
 	bool got_header;
 };
 
+
+struct HTTP_Request{
+	int type;
+	char host[MAX_HOST_SIZE];
+	int accept_language;	
+	char path[MAX_PATH_SIZE];
+};
 
 int set_nonblock(int fd)
 {
@@ -37,9 +54,10 @@ int set_nonblock(int fd)
 #endif
 } 
 
-int parse_http_string()
+int parse_http_string(char * str, size_t size, struct HTTP_Request * res)
 {
-	//TODO think of params of the func and what to return
+	//We parse http header contained in str and fill the necessary params of HTTP_Request structure
+
 	return 0;
 }
 
@@ -51,6 +69,11 @@ int parse_http_string()
 void write_cb(struct ev_loop *loop, struct ev_io *watcher, int revents)
 {
 	//TODO Write stuff and kill watcher when finished
+	struct my_io * x_watcher = (struct my_io *)watcher;
+	struct HTTP_Request * req = (struct HTTP_Request *)malloc(sizeof(struct HTTP_Request));
+	parse_http_string((char*) x_watcher -> in_buffer, x_watcher -> in_size, req);
+
+	//TODO Form an http reply header and give data if type is GET or POST
 	return;
 }
 
@@ -102,6 +125,7 @@ void read_cb(struct ev_loop *loop, struct ev_io *watcher, int revents)
 	if(end_sym != NULL)
 	{
 		printf("Got an HTTP Request Message END at  %p\n", end_sym);
+		//TODO To be a good server it should watch for a request type, and then read everything after header, but not this time
 		x_watcher -> got_header = true; 
 		ev_io_init(watcher, write_cb, watcher -> fd, EV_WRITE);
 		ev_io_start(loop,watcher);
