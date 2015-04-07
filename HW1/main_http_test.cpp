@@ -24,6 +24,9 @@ const size_t  MSG_LIMIT =  1024 * 1024; //We will send at one time only this amo
 const size_t  MAX_HOST_SIZE = 1024; //Max hostname len
 const size_t  MAX_PATH_SIZE = 1024; //Max file path len
 
+char files_dir[MAX_PATH_SIZE];
+char default_file[MAX_PATH_SIZE];
+
 struct my_io{	//Appending buffer for our watcher
 	struct ev_io watcher;
 	void * in_buffer;
@@ -40,6 +43,13 @@ struct HTTP_Request{
 	int accept_language;	
 	char path[MAX_PATH_SIZE];
 };
+
+
+
+//---------------------------------------------------------------
+//----------------------------Helpers----------------------------
+//---------------------------------------------------------------
+
 
 int set_nonblock(int fd)
 {
@@ -101,14 +111,38 @@ int parse_http_string(char * str, size_t size, struct HTTP_Request * res)
 	}
 
 	i+=k;
-
+//	int zero = i;
+	if(k == 1 && res->path[0] == '/')
+	{
+		std::cout << "Default file is set: " << default_file << std::endl;
+		strcpy(res->path, default_file);
+		std::cout << "Now path in res -> path is: "<<res->path<<std::endl;
+		//zero = strlen()		
+	}
+	else
+		res -> path[i] = 0;
 	//TODO - Parse more, but for now on it's enough
 	return 0;
 }
 
 
+void form_HTTP_reply_header(struct HTTP_Request * request, char * res)
+{
+	char * str_begin = request -> path;
+	if(request -> path [0] == '/')
+		str_begin+=1;
+	char * fname = (char*)malloc(MAX_PATH_SIZE * sizeof(char));
+	strcpy(fname, files_dir);
+	strcpy(fname+strlen(fname), str_begin);
+	std::cout << "Full file path:" << std::endl;
+	std::cout << fname << std::endl;	
+	return;
+}
+
+
 //------------------------------------------------------------
 //------------------------Callbacks---------------------------
+//------------------------------------------------------------
 
 
 void write_cb(struct ev_loop *loop, struct ev_io *watcher, int revents)
@@ -119,6 +153,24 @@ void write_cb(struct ev_loop *loop, struct ev_io *watcher, int revents)
 	parse_http_string((char*) x_watcher -> in_buffer, x_watcher -> in_size, req);
 
 	//TODO Form an http reply header and give data if type is GET or POST
+	if(req -> type == HTTP_GET)
+	{
+		std::cout << "ITS GET" << std::endl;
+	}
+	else if(req -> type == HTTP_POST)
+	{
+		std::cout << "ITS POST" << std::endl;
+	}
+	else if(req -> type == HTTP_HEAD)
+	{
+		std::cout <<"ITS HEAD"<<std::endl;
+	}
+	std::cout << "File path:"<<std::endl;
+	std::cout << req -> path << std::endl;
+	char * reply_header = (char*)malloc(sizeof(char) * H_SIZE_LIMIT);
+	std::cout << "Starting to form HTTP reply header." << std::endl;
+	form_HTTP_reply_header(req, reply_header);
+	ev_io_stop(loop,watcher);
 	return;
 }
 
@@ -126,8 +178,9 @@ void write_cb(struct ev_loop *loop, struct ev_io *watcher, int revents)
 void read_cb(struct ev_loop *loop, struct ev_io *watcher, int revents)
 {
 	const char * http_header_end = "\r\n\r\n";
-	struct my_io * x_watcher = (struct my_io *)watcher;
-	if(x_watcher -> got_header)
+//	struct my_io * x_watcher = (struct my_io *)malloc(sizeof(struct my_io));
+	struct my_io * p_watcher = (struct my_io *)watcher;
+	if(p_watcher -> got_header)
 	{
 		return; // TODO This is a patch, we ignore everything after header until we reply
 	}
@@ -149,8 +202,8 @@ void read_cb(struct ev_loop *loop, struct ev_io *watcher, int revents)
 	
 	char * end_sym = strstr(Buffer,http_header_end);
 //	std::cout << strstr(Buffer, http_header_end) << std::endl;
-	
-	size_t cur_msg_size = x_watcher -> in_size;
+//	std::cout << "RecvSize : " << RecvSize << std::endl;
+	size_t cur_msg_size = p_watcher -> in_size;
 	
 	if(end_sym == NULL)
 		cur_msg_size += RecvSize;
@@ -160,20 +213,26 @@ void read_cb(struct ev_loop *loop, struct ev_io *watcher, int revents)
 	if(cur_msg_size > H_SIZE_LIMIT)
 	{
 		std::cout << "Bad request" << std::endl;
-		x_watcher -> in_size = 0;
+		p_watcher -> in_size = 0;
 		return;
 	}
-
-	memcpy((char *)x_watcher -> in_buffer + x_watcher -> in_size, Buffer, cur_msg_size - x_watcher -> in_size);
-	x_watcher -> in_size = cur_msg_size;
+	std::cout << "Starting memcpy"<<std::endl;
+	memcpy((char *)p_watcher -> in_buffer + p_watcher -> in_size, Buffer, cur_msg_size - p_watcher -> in_size);
+	p_watcher -> in_size = cur_msg_size;
 
 	if(end_sym != NULL)
 	{
 		printf("Got an HTTP Request Message END at  %p\n", end_sym);
 		//TODO To be a good server it should watch for a request type, and then read everything after header, but not this time
-		x_watcher -> got_header = true; 
-		ev_io_init(watcher, write_cb, watcher -> fd, EV_WRITE);
-		ev_io_start(loop,watcher);
+ 		struct my_io * x_watcher = (struct my_io *)malloc(sizeof(struct my_io));
+		x_watcher -> in_buffer = malloc(sizeof(char)*H_SIZE_LIMIT);
+		x_watcher -> in_size = p_watcher -> in_size;
+		x_watcher -> out_buffer = NULL;
+		x_watcher -> out_size = 0;
+		x_watcher -> got_header = true;
+	        memcpy(x_watcher -> in_buffer, p_watcher -> in_buffer, p_watcher -> in_size);	
+		ev_io_init((struct ev_io *)x_watcher, write_cb, watcher -> fd, EV_WRITE);
+		ev_io_start(loop,(struct ev_io*)x_watcher);
 	}
 
 	return;
@@ -208,17 +267,23 @@ void accept_cb(struct ev_loop *loop, struct ev_io *watcher, int revents)
 
 //------------------------------------------------------------
 //------------------------Main--------------------------------
+//------------------------------------------------------------
+
 
 
 int main(int argc, char * argv[])
 {
 	std::string directory = "htocs/";
 	int port = 80;
-
+	char default_files_dir[] = "files/";
+	strcpy(files_dir,default_files_dir);
+	char d_file[] = "index.html";
+	strcpy(default_file,d_file);	
 	//TODO Parse CMD arguments for flags
 
 	struct ev_loop *loop = ev_default_loop(0);
 	struct ev_io w_accept; //Accepts HTTP requests, opens slave sockets
+
 
 	int MasterSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 
@@ -230,7 +295,7 @@ int main(int argc, char * argv[])
 
 	struct sockaddr_in SockAddr;
 	SockAddr.sin_family = AF_INET;
-	SockAddr.sin_port = htons(8080); //Listening for http on 80 port
+	SockAddr.sin_port = htons(8080); //Listening for http on 8080 port - TODO GetOpt from command prompt
 	SockAddr.sin_addr.s_addr = htonl(INADDR_ANY);
 
 	int Result = bind(MasterSocket, (struct sockaddr *) &SockAddr, sizeof(SockAddr));
