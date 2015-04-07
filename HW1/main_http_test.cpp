@@ -55,6 +55,7 @@ struct HTTP_Request{
 //---------------------------------------------------------------
 
 
+
 int set_nonblock(int fd)
 {
 	int flags;
@@ -143,17 +144,33 @@ int form_HTTP_reply_header(struct HTTP_Request * request, char * res) //Returns 
 	std::cout << fname << std::endl;	
 	int fd = open(fname,O_RDONLY);
 	std::cout << "Tried openning file, returned "<< fd<< std::endl;
+	time_t  timev;
+	time(&timev);
+	struct tm* timeinfo = localtime(&timev);
+	strftime(dtstring,80,"%d-%m-%Y %I:%M:%S", timeinfo);
+	std::cout << "Current datetime: "<< dtstring <<std::endl;
+
 	if(fd < 0)
 	{
 		//Forming 404 response
-		time_t  timev;
-		time(&timev);
-		struct tm* timeinfo = localtime(&timev);
-		strftime(dtstring,80,"%d-%m-%Y %I:%M:%S", timeinfo);
-		std::cout << "Current datetime: "<< dtstring <<std::endl;
+	//	time_t  timev;
+	//	time(&timev);
+	//	struct tm* timeinfo = localtime(&timev);
+	//	strftime(dtstring,80,"%d-%m-%Y %I:%M:%S", timeinfo);
+	//	std::cout << "Current datetime: "<< dtstring <<std::endl;
 		std::string x = std::string("HTTP/1.1 404 Not Found\nDate: ") + std::string(dtstring) + std::string("\nServer: MyTestServ\n\r\n\r\n");
 		strcpy(res,x.c_str());
 		return HTTP_FILE_NOT_FOUND;
+	}
+	else
+	{
+		size_t len = lseek(fd,0,SEEK_END);
+		std::cout << "File length is " << len <<std::endl;
+		std::string x = std::string("HTTP/1.1 200 Ok\nDate: ") + std::string(dtstring) + std::string("\nContent-Type: text/xml\nContent-Length:")+
+			std::to_string(len)+std::string("\n\r\n\r\n");
+	       	//TODO text/xml is a patch right now - make it work like it has to
+		strcpy(res,x.c_str());
+		
 	}	
 	return HTTP_OK;
 }
@@ -189,10 +206,17 @@ void write_cb(struct ev_loop *loop, struct ev_io *watcher, int revents)
 	char * reply_header = (char*)malloc(sizeof(char) * H_SIZE_LIMIT);
 	std::cout << "Starting to form HTTP reply header." << std::endl;
 	int res = form_HTTP_reply_header(req, reply_header);
+	//TODO Make send buffering
 	if(res == HTTP_FILE_NOT_FOUND)
 	{
 		//TODO echo some 404 content page
 		std::cout << "Sending HTTP 404"<<std::endl;
+		send(watcher->fd,reply_header,strlen(reply_header),MSG_NOSIGNAL);
+	}
+	else
+	{
+		//TODO Check if GET or POST and send content. For now it is sending the header
+		std::cout<< "Sending HTTP 200"<<std::endl;
 		send(watcher->fd,reply_header,strlen(reply_header),MSG_NOSIGNAL);
 	}
 	ev_io_stop(loop,watcher);
