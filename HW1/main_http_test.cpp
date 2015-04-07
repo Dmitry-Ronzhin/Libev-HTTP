@@ -19,6 +19,10 @@
 #define en_EN 0x01
 
 
+#define HTTP_OK 200
+#define HTTP_FILE_NOT_FOUND 404
+
+
 const size_t  H_SIZE_LIMIT = 8 * 1024;
 const size_t  MSG_LIMIT =  1024 * 1024; //We will send at one time only this amount of data
 const size_t  MAX_HOST_SIZE = 1024; //Max hostname len
@@ -126,17 +130,32 @@ int parse_http_string(char * str, size_t size, struct HTTP_Request * res)
 }
 
 
-void form_HTTP_reply_header(struct HTTP_Request * request, char * res)
+int form_HTTP_reply_header(struct HTTP_Request * request, char * res) //Returns response status
 {
 	char * str_begin = request -> path;
 	if(request -> path [0] == '/')
 		str_begin+=1;
 	char * fname = (char*)malloc(MAX_PATH_SIZE * sizeof(char));
+	char dtstring[80];
 	strcpy(fname, files_dir);
 	strcpy(fname+strlen(fname), str_begin);
 	std::cout << "Full file path:" << std::endl;
 	std::cout << fname << std::endl;	
-	return;
+	int fd = open(fname,O_RDONLY);
+	std::cout << "Tried openning file, returned "<< fd<< std::endl;
+	if(fd < 0)
+	{
+		//Forming 404 response
+		time_t  timev;
+		time(&timev);
+		struct tm* timeinfo = localtime(&timev);
+		strftime(dtstring,80,"%d-%m-%Y %I:%M:%S", timeinfo);
+		std::cout << "Current datetime: "<< dtstring <<std::endl;
+		std::string x = std::string("HTTP/1.1 404 Not Found\nDate: ") + std::string(dtstring) + std::string("\nServer: MyTestServ\n\r\n\r\n");
+		strcpy(res,x.c_str());
+		return HTTP_FILE_NOT_FOUND;
+	}	
+	return HTTP_OK;
 }
 
 
@@ -169,7 +188,13 @@ void write_cb(struct ev_loop *loop, struct ev_io *watcher, int revents)
 	std::cout << req -> path << std::endl;
 	char * reply_header = (char*)malloc(sizeof(char) * H_SIZE_LIMIT);
 	std::cout << "Starting to form HTTP reply header." << std::endl;
-	form_HTTP_reply_header(req, reply_header);
+	int res = form_HTTP_reply_header(req, reply_header);
+	if(res == HTTP_FILE_NOT_FOUND)
+	{
+		//TODO echo some 404 content page
+		std::cout << "Sending HTTP 404"<<std::endl;
+		send(watcher->fd,reply_header,strlen(reply_header),MSG_NOSIGNAL);
+	}
 	ev_io_stop(loop,watcher);
 	return;
 }
@@ -233,6 +258,7 @@ void read_cb(struct ev_loop *loop, struct ev_io *watcher, int revents)
 	        memcpy(x_watcher -> in_buffer, p_watcher -> in_buffer, p_watcher -> in_size);	
 		ev_io_init((struct ev_io *)x_watcher, write_cb, watcher -> fd, EV_WRITE);
 		ev_io_start(loop,(struct ev_io*)x_watcher);
+		//TODO Kill reader watcher after getting all stuff from user
 	}
 
 	return;
