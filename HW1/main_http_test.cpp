@@ -57,7 +57,52 @@ int set_nonblock(int fd)
 int parse_http_string(char * str, size_t size, struct HTTP_Request * res)
 {
 	//We parse http header contained in str and fill the necessary params of HTTP_Request structure
+	size_t i = 0;
+	for(i = 0; i < size; i++)
+	{
+		if(str[i] != ' ' && str[i] != '\t')
+			break;
+	}
+	
+	if(i == size)
+		return -1; //Critical - empty string given
+	if(size - i < 3)
+		return -1; //Critical - bad string
+	if(str[i] == 'G' && str[i+1] == 'E' && str[i+2] == 'T' )
+	{
+		res -> type = HTTP_GET;
+		i+=3;
+	}
+	else if(str[i] == 'P' && str[i+1] == 'O' && str[i+2] == 'S' && str[i+3] == 'T')
+	{
+		res -> type = HTTP_POST;
+		i+=4;
+	}
+	else if(str[i] == 'H' && str[i+1] == 'E' && str[i+2] == 'A' && str[i+3] == 'D')
+	{
+		res -> type = HTTP_HEAD;
+		i+=4;
+	}
+	
+	for(;i < size; i++)
+	{
+		if(str[i] != ' ' && str[i] != '\t')
+			break;
 
+	}
+	if( i == size )
+		return -1;
+	
+	int k =0;
+	while(str[i + k]!=' ')
+	{
+		res -> path[k] = str[i+k];
+		k++;
+	}
+
+	i+=k;
+
+	//TODO - Parse more, but for now on it's enough
 	return 0;
 }
 
