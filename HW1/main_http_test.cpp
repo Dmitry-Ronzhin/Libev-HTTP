@@ -46,6 +46,9 @@ struct HTTP_Request{
 	char host[MAX_HOST_SIZE];
 	int accept_language;	
 	char path[MAX_PATH_SIZE];
+	int fd;
+	size_t f_size;
+	char fname[MAX_PATH_SIZE];
 };
 
 
@@ -144,12 +147,14 @@ int form_HTTP_reply_header(struct HTTP_Request * request, char * res) //Returns 
 	std::cout << fname << std::endl;	
 	int fd = open(fname,O_RDONLY);
 	std::cout << "Tried openning file, returned "<< fd<< std::endl;
+	strcpy(request -> fname, fname);
 	time_t  timev;
 	time(&timev);
 	struct tm* timeinfo = localtime(&timev);
 	strftime(dtstring,80,"%d-%m-%Y %I:%M:%S", timeinfo);
 	std::cout << "Current datetime: "<< dtstring <<std::endl;
-
+	
+	request -> fd = fd;
 	if(fd < 0)
 	{
 		//Forming 404 response
@@ -165,6 +170,7 @@ int form_HTTP_reply_header(struct HTTP_Request * request, char * res) //Returns 
 	else
 	{
 		size_t len = lseek(fd,0,SEEK_END);
+		request -> f_size = len;
 		std::cout << "File length is " << len <<std::endl;
 		std::string x = std::string("HTTP/1.1 200 Ok\nDate: ") + std::string(dtstring) + std::string("\nContent-Type: text/xml\nContent-Length:")+
 			std::to_string(len)+std::string("\n\r\n\r\n");
@@ -218,6 +224,19 @@ void write_cb(struct ev_loop *loop, struct ev_io *watcher, int revents)
 		//TODO Check if GET or POST and send content. For now it is sending the header
 		std::cout<< "Sending HTTP 200"<<std::endl;
 		send(watcher->fd,reply_header,strlen(reply_header),MSG_NOSIGNAL);
+	}
+	if(req->type == HTTP_GET || req->type == HTTP_POST)
+	{
+		int fd = open(req -> fname, O_RDONLY);
+		std::cout << "File descriptor: "<< fd << " | File size: " <<req->f_size<<std::endl;
+		std::cout << "Sending html body which is:"<<std::endl;
+		//TODO Here we send file body - make buffering
+		void * msg_body = malloc( req -> f_size);
+		int r =	read( fd, msg_body, req -> f_size );
+		std::cout <<(char*) msg_body << std::endl;
+		std::cout << "Have read "<<r<<" bytes from file"<<std::endl;
+		send(watcher -> fd,(char*) msg_body, req -> f_size, MSG_NOSIGNAL);
+		free(msg_body);
 	}
 	ev_io_stop(loop,watcher);
 	return;
