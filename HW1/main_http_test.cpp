@@ -11,6 +11,10 @@
 #include <errno.h>
 #include <string.h>
 
+
+#include <arpa/inet.h>
+
+
 #define HTTP_GET 0x01
 #define HTTP_HEAD 0x02
 #define HTTP_POST 0x08
@@ -21,6 +25,10 @@
 
 #define HTTP_OK 200
 #define HTTP_FILE_NOT_FOUND 404
+
+
+#define CONTENT_TEXT_HTML 1
+#define CONTENT_JPEG 2
 
 
 const size_t  H_SIZE_LIMIT = 8 * 1024;
@@ -46,6 +54,7 @@ struct HTTP_Request{
 	char host[MAX_HOST_SIZE];
 	int accept_language;	
 	char path[MAX_PATH_SIZE];
+	int content_type;
 	int fd;
 	size_t f_size;
 	char fname[MAX_PATH_SIZE];
@@ -129,7 +138,15 @@ int parse_http_string(char * str, size_t size, struct HTTP_Request * res)
 	}
 	else
 		res -> path[i] = 0;
+	
+	if(strstr(res->path, ".jpg")!=NULL) //TODO Fix and check on the end of the str
+	{
+			res->content_type = CONTENT_JPEG;
+	}
+	else
+		res->content_type = CONTENT_TEXT_HTML;
 	//TODO - Parse more, but for now on it's enough
+
 	return 0;
 }
 
@@ -157,12 +174,6 @@ int form_HTTP_reply_header(struct HTTP_Request * request, char * res) //Returns 
 	request -> fd = fd;
 	if(fd < 0)
 	{
-		//Forming 404 response
-	//	time_t  timev;
-	//	time(&timev);
-	//	struct tm* timeinfo = localtime(&timev);
-	//	strftime(dtstring,80,"%d-%m-%Y %I:%M:%S", timeinfo);
-	//	std::cout << "Current datetime: "<< dtstring <<std::endl;
 		std::string x = std::string("HTTP/1.1 404 Not Found\nDate: ") + std::string(dtstring) + std::string("\nServer: MyTestServ\n\r\n\r\n");
 		strcpy(res,x.c_str());
 		return HTTP_FILE_NOT_FOUND;
@@ -218,6 +229,8 @@ void write_cb(struct ev_loop *loop, struct ev_io *watcher, int revents)
 		//TODO echo some 404 content page
 		std::cout << "Sending HTTP 404"<<std::endl;
 		send(watcher->fd,reply_header,strlen(reply_header),MSG_NOSIGNAL);
+		ev_io_stop(loop,watcher);
+		return;
 	}
 	else
 	{
@@ -228,17 +241,35 @@ void write_cb(struct ev_loop *loop, struct ev_io *watcher, int revents)
 	if(req->type == HTTP_GET || req->type == HTTP_POST)
 	{
 		int fd = open(req -> fname, O_RDONLY);
-		std::cout << "File descriptor: "<< fd << " | File size: " <<req->f_size<<std::endl;
-		std::cout << "Sending html body which is:"<<std::endl;
-		//TODO Here we send file body - make buffering
-		void * msg_body = malloc( req -> f_size);
-		int r =	read( fd, msg_body, req -> f_size );
-		std::cout <<(char*) msg_body << std::endl;
-		std::cout << "Have read "<<r<<" bytes from file"<<std::endl;
-		send(watcher -> fd,(char*) msg_body, req -> f_size, MSG_NOSIGNAL);
-		free(msg_body);
+		if(req -> content_type == CONTENT_TEXT_HTML)
+		{
+		//	int fd = open(req -> fname, O_RDONLY);
+			std::cout << "File descriptor: "<< fd << " | File size: " <<req->f_size<<std::endl;
+			std::cout << "Sending html body which is:"<<std::endl;
+			//TODO Here we send file body - make buffering
+			void * msg_body = malloc( req -> f_size);
+			int r =	read( fd, msg_body, req -> f_size );
+			std::cout <<(char*) msg_body << std::endl;
+			std::cout << "Have read "<<r<<" bytes from file"<<std::endl;
+			send(watcher -> fd,(char*) msg_body, req -> f_size, MSG_NOSIGNAL);
+			free(msg_body);
+
+		}
+		else if(req->content_type == CONTENT_JPEG)
+		{
+			std::cout <<"Sending jpg file"<<std::endl;
+			void * pic_body = malloc( req -> f_size );
+			int r = read(fd, pic_body, req->f_size);
+			send(watcher -> fd, (char*) pic_body, req -> f_size, MSG_NOSIGNAL);
+			free(pic_body);
+		}
+		else
+		{
+			//TODO For now on our server cant handle any other type of content
+		}
 	}
 	ev_io_stop(loop,watcher);
+
 	return;
 }
 
@@ -342,10 +373,64 @@ void accept_cb(struct ev_loop *loop, struct ev_io *watcher, int revents)
 
 int main(int argc, char * argv[])
 {
+
+	//Getting options from command prompt
+	char *dvalue = NULL;
+	char *hvalue = NULL;
+	char *pvalue = NULL; 
+	int index;
+	int c;
+
+	opterr = 0;
+	while ((c = getopt (argc, argv, "d:p:h:")) != -1)
+	{
+		switch(c)
+		{
+			case 'd':
+				std::cout << "-d : "<<optarg <<std::endl;
+				dvalue = optarg;
+				break;
+			case 'p':
+				std::cout << "-p : "<<optarg <<std::endl;
+			       pvalue = optarg;
+			       break;
+			case 'h':
+			       std::cout << "-h : "<<optarg <<std::endl;
+				hvalue = optarg;
+		 		break;
+			case '?':
+				if(isprint(optopt))
+				{
+					std::cout << "Unknown option" << std::endl;
+				}
+				else
+				{
+					std::cout << "Incorrect input" <<std::endl;
+					return 0;
+				}		
+			default:
+				abort();
+		}
+	}
+
+	std::cout << "Got vals for -d -p -h as :" << dvalue << " "<< pvalue << " "<< hvalue<<std::endl;
+
+	// Starting work with sockets
+
 	std::string directory = "htocs/";
-	int port = 80;
+	int port = atoi(pvalue);
+	std::cout<<"Port num in int is : " <<port<<std::endl;
 	char default_files_dir[] = "files/";
-	strcpy(files_dir,default_files_dir);
+
+	if(dvalue != NULL)
+	{
+		strcpy(files_dir, dvalue);
+
+		std::cout<<"The files dir is: "<<files_dir<<std::endl;
+	}
+	else{
+		strcpy(files_dir,default_files_dir);
+	}
 	char d_file[] = "index.html";
 	strcpy(default_file,d_file);	
 	//TODO Parse CMD arguments for flags
@@ -364,8 +449,11 @@ int main(int argc, char * argv[])
 
 	struct sockaddr_in SockAddr;
 	SockAddr.sin_family = AF_INET;
-	SockAddr.sin_port = htons(8080); //Listening for http on 8080 port - TODO GetOpt from command prompt
-	SockAddr.sin_addr.s_addr = htonl(INADDR_ANY);
+	SockAddr.sin_port = htons(port); //Listening for http on 8080 port - TODO GetOpt from command prompt
+	if(hvalue != NULL)
+		SockAddr.sin_addr.s_addr = inet_addr(hvalue);
+	else
+		SockAddr.sin_addr.s_addr = htonl(INADDR_ANY);
 
 	int Result = bind(MasterSocket, (struct sockaddr *) &SockAddr, sizeof(SockAddr));
 
