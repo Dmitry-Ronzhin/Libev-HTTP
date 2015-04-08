@@ -45,6 +45,7 @@ struct my_io{	//Appending buffer for our watcher
 	void * out_buffer;
 	size_t in_size;
 	size_t out_size;
+	size_t send_offset;
 	bool got_header;
 };
 
@@ -57,7 +58,7 @@ struct HTTP_Request{
 	int content_type;
 	int fd;
 	size_t f_size;
-	char fname[MAX_PATH_SIZE];
+	char fname[MAX_PATH_SIZE]; //TODO map
 };
 
 
@@ -90,7 +91,10 @@ int parse_http_string(char * str, size_t size, struct HTTP_Request * res)
 		if(str[i] != ' ' && str[i] != '\t')
 			break;
 	}
-	
+
+	std::cout << "Line is: \n"<< str <<std::endl;
+	std::cout<< "Parsing debug info! Checking if last symbols are brbnbrbn "<<(str[size-1]=='\n')<<" "<<(str[size-2]=='\r')<< " "<<
+		(str[size-3]=='\n')<< " "<<(str[size-4] == '\r')<<std::endl;
 	if(i == size)
 		return -1; //Critical - empty string given
 	if(size - i < 3)
@@ -128,7 +132,6 @@ int parse_http_string(char * str, size_t size, struct HTTP_Request * res)
 	}
 
 	i+=k;
-//	int zero = i;
 	if(k == 1 && res->path[0] == '/')
 	{
 		std::cout << "Default file is set: " << default_file << std::endl;
@@ -152,7 +155,7 @@ int parse_http_string(char * str, size_t size, struct HTTP_Request * res)
 
 
 int form_HTTP_reply_header(struct HTTP_Request * request, char * res) //Returns response status
-{
+{ //TODO std string, can break char*
 	char * str_begin = request -> path;
 	if(request -> path [0] == '/')
 		str_begin+=1;
@@ -174,17 +177,26 @@ int form_HTTP_reply_header(struct HTTP_Request * request, char * res) //Returns 
 	request -> fd = fd;
 	if(fd < 0)
 	{
-		std::string x = std::string("HTTP/1.1 404 Not Found\nDate: ") + std::string(dtstring) + std::string("\nServer: MyTestServ\n\r\n\r\n");
+		std::string x = std::string("HTTP/1.1 404 Not Found\nDate: ") + std::string(dtstring) + std::string("\nServer: MyTestServ\r\n\r\n");
 		strcpy(res,x.c_str());
 		return HTTP_FILE_NOT_FOUND;
 	}
 	else
-	{
+	{ //TODO ostringstream
 		size_t len = lseek(fd,0,SEEK_END);
 		request -> f_size = len;
 		std::cout << "File length is " << len <<std::endl;
-		std::string x = std::string("HTTP/1.1 200 Ok\nDate: ") + std::string(dtstring) + std::string("\nContent-Type: text/xml\nContent-Length:")+
-			std::to_string(len)+std::string("\n\r\n\r\n");
+		std::string x ="";
+		if(request -> content_type == CONTENT_TEXT_HTML )
+		{
+			 x = std::string("HTTP/1.1 200 Ok\nDate: ") + std::string(dtstring) + std::string("\nContent-Type: text/html\nContent-Length:")+
+				std::to_string(len)+std::string("\r\n\r\n");
+		}
+		else if( request ->content_type == CONTENT_JPEG )
+		{
+			  x = std::string("HTTP/1.1 200 Ok\nDate: ") + std::string(dtstring) + std::string("\nContent-Type: image/jpeg\nContent-Length:")     +	                        std::to_string(len)+std::string("\r\n\r\n");
+
+		}
 	       	//TODO text/xml is a patch right now - make it work like it has to
 		strcpy(res,x.c_str());
 		
@@ -197,11 +209,22 @@ int form_HTTP_reply_header(struct HTTP_Request * request, char * res) //Returns 
 //------------------------Callbacks---------------------------
 //------------------------------------------------------------
 
-
+//TODO High Priority finish reading
 void write_cb(struct ev_loop *loop, struct ev_io *watcher, int revents)
 {
 	//TODO Write stuff and kill watcher when finished
 	struct my_io * x_watcher = (struct my_io *)watcher;
+	if(x_watcher -> send_offset != 0)
+	{
+		x_watcher->send_offset += send(watcher->fd,(char*)x_watcher -> out_buffer + x_watcher -> send_offset,
+			       	x_watcher -> out_size - x_watcher -> send_offset,MSG_NOSIGNAL);
+		if (x_watcher -> send_offset == x_watcher -> out_size)
+		{
+			ev_io_stop(loop,watcher);
+		}
+		return;
+			
+	}
 	struct HTTP_Request * req = (struct HTTP_Request *)malloc(sizeof(struct HTTP_Request));
 	parse_http_string((char*) x_watcher -> in_buffer, x_watcher -> in_size, req);
 
@@ -236,37 +259,45 @@ void write_cb(struct ev_loop *loop, struct ev_io *watcher, int revents)
 	{
 		//TODO Check if GET or POST and send content. For now it is sending the header
 		std::cout<< "Sending HTTP 200"<<std::endl;
-		send(watcher->fd,reply_header,strlen(reply_header),MSG_NOSIGNAL);
+		send(watcher->fd,reply_header,strlen(reply_header),MSG_NOSIGNAL); //TODO Buffer
 	}
 	if(req->type == HTTP_GET || req->type == HTTP_POST)
 	{
 		int fd = open(req -> fname, O_RDONLY);
-		if(req -> content_type == CONTENT_TEXT_HTML)
-		{
+	//	if(req -> content_type == CONTENT_TEXT_HTML)
+	//	{
 		//	int fd = open(req -> fname, O_RDONLY);
 			std::cout << "File descriptor: "<< fd << " | File size: " <<req->f_size<<std::endl;
 			std::cout << "Sending html body which is:"<<std::endl;
 			//TODO Here we send file body - make buffering
-			void * msg_body = malloc( req -> f_size);
+			void * msg_body = malloc( req -> f_size); //TODO vector char
 			int r =	read( fd, msg_body, req -> f_size );
 			std::cout <<(char*) msg_body << std::endl;
 			std::cout << "Have read "<<r<<" bytes from file"<<std::endl;
-			send(watcher -> fd,(char*) msg_body, req -> f_size, MSG_NOSIGNAL);
-			free(msg_body);
+			x_watcher -> out_buffer = msg_body;
+			x_watcher -> send_offset = 0;
+			x_watcher -> out_size = req->f_size;
+			x_watcher -> send_offset = send(watcher -> fd,(char*) msg_body, req -> f_size, MSG_NOSIGNAL); //TODO send return -1
+			std::cout<<"Have sent "<<x_watcher->send_offset<<" bytes"<<std::endl;
+			if(x_watcher ->send_offset == req -> f_size)
+			{	
+				//send(watcher->fd, ">", 1,MSG_NOSIGNAL);
+				free(msg_body);
+			}
 
-		}
-		else if(req->content_type == CONTENT_JPEG)
-		{
-			std::cout <<"Sending jpg file"<<std::endl;
-			void * pic_body = malloc( req -> f_size );
-			int r = read(fd, pic_body, req->f_size);
-			send(watcher -> fd, (char*) pic_body, req -> f_size, MSG_NOSIGNAL);
-			free(pic_body);
-		}
-		else
-		{
+	//	}
+	//	else if(req->content_type == CONTENT_JPEG)
+	//	{
+	//		std::cout <<"Sending jpg file"<<std::endl;
+	//		void * pic_body = malloc( req -> f_size );
+	//		int r = read(fd, pic_body, req->f_size);
+	//		send(watcher -> fd, (char*) pic_body, req -> f_size, MSG_NOSIGNAL);
+	//		free(pic_body);
+	//	}
+	//	else
+	//	{
 			//TODO For now on our server cant handle any other type of content
-		}
+	//	}
 	}
 	ev_io_stop(loop,watcher);
 
@@ -278,7 +309,7 @@ void read_cb(struct ev_loop *loop, struct ev_io *watcher, int revents)
 {
 	const char * http_header_end = "\r\n\r\n";
 //	struct my_io * x_watcher = (struct my_io *)malloc(sizeof(struct my_io));
-	struct my_io * p_watcher = (struct my_io *)watcher;
+	struct my_io * p_watcher = (struct my_io *)watcher; //reinterpret cast
 	if(p_watcher -> got_header)
 	{
 		return; // TODO This is a patch, we ignore everything after header until we reply
@@ -295,7 +326,7 @@ void read_cb(struct ev_loop *loop, struct ev_io *watcher, int revents)
 	{
 		printf("%d\n",__LINE__);
 		ev_io_stop(loop, watcher);
-//	kfree(watcher);
+//	kfree(watcher); +return
 	}
 	Buffer[RecvSize] = '\0';
 	
@@ -318,23 +349,32 @@ void read_cb(struct ev_loop *loop, struct ev_io *watcher, int revents)
 	std::cout << "Starting memcpy"<<std::endl;
 	memcpy((char *)p_watcher -> in_buffer + p_watcher -> in_size, Buffer, cur_msg_size - p_watcher -> in_size);
 	p_watcher -> in_size = cur_msg_size;
-
+	//*((char*)(p_watcher->in_buffer) +  cur_msg_size)  = 0;
+	//printf( "Cur end sym: %p\n",end_sym);
+	//std::cout << "Cur in_buf: "<<(char*)p_watcher -> in_buffer<<std::endl;	
+	if(end_sym == NULL)
+		end_sym = strstr((char*)p_watcher -> in_buffer, http_header_end); //Searching again for header end to prevent header end segmentation
+	//printf( "Now end_sym is: %p\b",end_sym);
 	if(end_sym != NULL)
 	{
+		ev_io_stop(loop,watcher);
 		printf("Got an HTTP Request Message END at  %p\n", end_sym);
 		//TODO To be a good server it should watch for a request type, and then read everything after header, but not this time
- 		struct my_io * x_watcher = (struct my_io *)malloc(sizeof(struct my_io));
-		x_watcher -> in_buffer = malloc(sizeof(char)*H_SIZE_LIMIT);
-		x_watcher -> in_size = p_watcher -> in_size;
+		//TODO Free last watcher !!!!!!!! 		
+		struct my_io * x_watcher = (struct my_io *)watcher;//malloc(sizeof(struct my_io));
+		//x_watcher -> in_buffer = malloc(sizeof(char)*H_SIZE_LIMIT);
+		//x_watcher -> in_size = p_watcher -> in_size;
 		x_watcher -> out_buffer = NULL;
 		x_watcher -> out_size = 0;
 		x_watcher -> got_header = true;
-	        memcpy(x_watcher -> in_buffer, p_watcher -> in_buffer, p_watcher -> in_size);	
+		x_watcher -> send_offset = 0;
+	        //memcpy(x_watcher -> in_buffer, p_watcher -> in_buffer, p_watcher -> in_size);	
 		ev_io_init((struct ev_io *)x_watcher, write_cb, watcher -> fd, EV_WRITE);
 		ev_io_start(loop,(struct ev_io*)x_watcher);
 		//TODO Kill reader watcher after getting all stuff from user
+//TODO parse here not in write
 	}
-
+	//TODO Patch connection close
 	return;
 }
 
@@ -406,10 +446,10 @@ int main(int argc, char * argv[])
 				else
 				{
 					std::cout << "Incorrect input" <<std::endl;
-					return 0;
+					return -1;
 				}		
 			default:
-				abort();
+				return -2;
 		}
 	}
 
